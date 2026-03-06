@@ -1,8 +1,21 @@
-const { Client, GatewayIntentBits, REST, Routes, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelSelectMenuBuilder, ComponentType } = require('discord.js');
+require('dotenv').config();
+
+const {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  ActionRowBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ChannelSelectMenuBuilder,
+  ComponentType
+} = require('discord.js');
+
 const database = require('./src/database');
 const tiktokMonitor = require('./src/tiktokMonitor');
 const { commands, PASSWORD } = require('./src/commands');
-require('dotenv').config();
 
 const client = new Client({
   intents: [
@@ -15,27 +28,30 @@ const client = new Client({
 const CHECK_INTERVAL = 2 * 60 * 1000;
 
 client.once('ready', async () => {
-  console.log(`✅ البوت جاهز! تم تسجيل الدخول باسم ${client.user.tag}`);
+  console.log(`✅ البوت جاهز! ${client.user.tag}`);
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
   try {
-    console.log('⏳ جاري تسجيل أوامر السلاش...');
-
     await rest.put(
       Routes.applicationCommands(client.user.id),
       { body: commands.map(cmd => cmd.data.toJSON()) }
     );
 
-    console.log('✅ تم تسجيل أوامر السلاش بنجاح!');
+    console.log('✅ تم تسجيل أوامر السلاش');
   } catch (error) {
-    console.error('❌ خطأ في تسجيل أوامر السلاش:', error);
+    console.error('❌ خطأ في تسجيل الأوامر:', error);
   }
 
   startMonitoring();
 });
 
 client.on('interactionCreate', async interaction => {
+
+  /* ======================
+     SLASH COMMANDS
+  ====================== */
+
   if (interaction.isChatInputCommand()) {
     const command = commands.find(cmd => cmd.data.name === interaction.commandName);
 
@@ -44,60 +60,38 @@ client.on('interactionCreate', async interaction => {
     try {
       await command.execute(interaction);
     } catch (error) {
-      console.error('خطأ في تنفيذ الأمر:', error);
+      console.error(error);
 
-      const replyMethod = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
-      await interaction[replyMethod]({ content: 'حدث خطأ أثناء تنفيذ الأمر!', ephemeral: true });
+      const method = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
+
+      await interaction[method]({
+        content: '❌ حدث خطأ أثناء تنفيذ الأمر',
+        flags: 64
+      });
     }
   }
 
+  /* ======================
+     MODAL SUBMIT
+  ====================== */
+
   if (interaction.isModalSubmit()) {
-    const password = interaction.fields.getTextInputValue('passwordInput');
 
-    if (interaction.customId === 'passwordModal') {
-      if (password !== PASSWORD) {
-        await interaction.reply({ content: '❌ كلمة السر غير صحيحة!', ephemeral: true });
-        return;
-      }
+    if (interaction.customId === 'addChannelModal') {
 
-      const modal = new ModalBuilder()
-        .setCustomId('channelInfoModal')
-        .setTitle('معلومات قناة TikTok');
-
-      const usernameInput = new TextInputBuilder()
-        .setCustomId('usernameInput')
-        .setLabel('يوزرنيم قناة TikTok')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('مثال: mo2026_editor')
-        .setRequired(true);
-
-      const videoMessageInput = new TextInputBuilder()
-        .setCustomId('videoMessageInput')
-        .setLabel('رسالة الفيديو الجديد')
-        .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder('مثال: نزل فيديو جديد 🔥')
-        .setRequired(true);
-
-      const liveMessageInput = new TextInputBuilder()
-        .setCustomId('liveMessageInput')
-        .setLabel('رسالة البث المباشر')
-        .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder('مثال: القناة بدأت لايف الآن 🔴')
-        .setRequired(true);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(usernameInput),
-        new ActionRowBuilder().addComponents(videoMessageInput),
-        new ActionRowBuilder().addComponents(liveMessageInput)
-      );
-
-      await interaction.showModal(modal);
-    } else if (interaction.customId === 'channelInfoModal') {
-      await interaction.deferReply({ ephemeral: true });
-
+      const password = interaction.fields.getTextInputValue('passwordInput').trim();
       const username = interaction.fields.getTextInputValue('usernameInput');
       const videoMessage = interaction.fields.getTextInputValue('videoMessageInput');
       const liveMessage = interaction.fields.getTextInputValue('liveMessageInput');
+
+      if (password !== PASSWORD.trim()) {
+        return interaction.reply({
+          content: '❌ كلمة السر غير صحيحة!',
+          flags: 64
+        });
+      }
+
+      await interaction.deferReply({ flags: 64 });
 
       const selectMenu = new ChannelSelectMenuBuilder()
         .setCustomId(`channelSelect_${username}_${Date.now()}`)
@@ -107,110 +101,172 @@ client.on('interactionCreate', async interaction => {
       const row = new ActionRowBuilder().addComponents(selectMenu);
 
       const response = await interaction.editReply({
-        content: 'اختر قناة Discord التي سيتم النشر فيها:',
+        content: 'اختر القناة التي سيتم النشر فيها:',
         components: [row]
       });
 
-      try {
-        const collector = response.createMessageComponentCollector({
-          componentType: ComponentType.ChannelSelect,
-          time: 60000
-        });
+      const collector = response.createMessageComponentCollector({
+        componentType: ComponentType.ChannelSelect,
+        time: 60000
+      });
 
-        collector.on('collect', async i => {
-          if (i.user.id !== interaction.user.id) {
-            return i.reply({ content: 'هذه القائمة ليست لك!', ephemeral: true });
-          }
+      collector.on('collect', async i => {
 
-          const selectedChannel = i.channels.first();
+        if (i.user.id !== interaction.user.id) {
+          return i.reply({
+            content: '❌ هذه القائمة ليست لك!',
+            flags: 64
+          });
+        }
 
-          try {
-            await database.addChannel(username, selectedChannel.id, videoMessage, liveMessage);
+        const selectedChannel = i.channels.first();
+
+        try {
+
+          await database.addChannel(
+            username,
+            selectedChannel.id,
+            videoMessage,
+            liveMessage
+          );
+
+          await i.update({
+            content: `✅ تمت إضافة قناة **${username}**\nسيتم النشر في <#${selectedChannel.id}>`,
+            components: []
+          });
+
+          collector.stop();
+
+        } catch (error) {
+
+          if (error.code === '23505') {
 
             await i.update({
-              content: `✅ تمت إضافة قناة **${username}** بنجاح!\nسيتم النشر في: <#${selectedChannel.id}>`,
+              content: '❌ هذه القناة مضافة بالفعل!',
               components: []
             });
 
-            collector.stop();
-          } catch (error) {
-            if (error.code === '23505') {
-              await i.update({
-                content: '❌ هذه القناة مضافة بالفعل!',
-                components: []
-              });
-            } else {
-              console.error('خطأ في إضافة القناة:', error);
-              await i.update({
-                content: '❌ حدث خطأ أثناء إضافة القناة.',
-                components: []
-              });
-            }
-            collector.stop();
-          }
-        });
+          } else {
 
-        collector.on('end', collected => {
-          if (collected.size === 0) {
-            interaction.editReply({
-              content: '❌ انتهى الوقت! لم يتم اختيار قناة.',
+            console.error(error);
+
+            await i.update({
+              content: '❌ حدث خطأ أثناء إضافة القناة',
               components: []
             });
+
           }
-        });
-      } catch (error) {
-        console.error('خطأ في المجمع:', error);
-      }
-    } else if (interaction.customId.startsWith('deletePasswordModal_')) {
+
+          collector.stop();
+        }
+
+      });
+
+      collector.on('end', collected => {
+
+        if (collected.size === 0) {
+          interaction.editReply({
+            content: '❌ انتهى الوقت ولم يتم اختيار قناة',
+            components: []
+          });
+        }
+
+      });
+
+    }
+
+    /* ======================
+       DELETE CHANNEL
+    ====================== */
+
+    else if (interaction.customId.startsWith('deletePasswordModal_')) {
+
       const username = interaction.customId.replace('deletePasswordModal_', '');
+      const password = interaction.fields.getTextInputValue('passwordInput').trim();
 
-      if (password !== PASSWORD) {
-        await interaction.reply({ content: '❌ كلمة السر غير صحيحة!', ephemeral: true });
-        return;
+      if (password !== PASSWORD.trim()) {
+        return interaction.reply({
+          content: '❌ كلمة السر غير صحيحة!',
+          flags: 64
+        });
       }
 
       await interaction.deferReply();
 
       try {
+
         await database.deleteChannel(username);
-        await interaction.editReply(`✅ تم حذف قناة **${username}** من المراقبة بنجاح!`);
+
+        await interaction.editReply(
+          `✅ تم حذف قناة **${username}** من المراقبة`
+        );
+
       } catch (error) {
-        console.error('خطأ في حذف القناة:', error);
-        await interaction.editReply('❌ حدث خطأ أثناء حذف القناة.');
+
+        console.error(error);
+
+        await interaction.editReply('❌ حدث خطأ أثناء الحذف');
+
       }
+
     }
+
   }
+
 });
 
+/* ======================
+   TIKTOK MONITOR
+====================== */
+
 async function startMonitoring() {
-  console.log('🔄 بدء نظام المراقبة...');
+
+  console.log('🔄 بدء نظام المراقبة');
 
   setInterval(async () => {
+
     try {
+
       const channels = await database.getAllChannels();
 
       for (const channelData of channels) {
         await checkChannelUpdates(channelData);
       }
+
     } catch (error) {
+
       console.error('خطأ في المراقبة:', error);
+
     }
+
   }, CHECK_INTERVAL);
 
-  console.log(`✅ نظام المراقبة يعمل! يتم الفحص كل ${CHECK_INTERVAL / 1000} ثانية.`);
 }
 
 async function checkChannelUpdates(channelData) {
+
   try {
+
     const latestVideo = await tiktokMonitor.getLatestVideo(channelData.tiktok_username);
 
-    if (latestVideo && latestVideo.id !== channelData.last_video_id && channelData.last_video_id !== '') {
+    if (
+      latestVideo &&
+      latestVideo.id !== channelData.last_video_id &&
+      channelData.last_video_id !== ''
+    ) {
+
       const discordChannel = await client.channels.fetch(channelData.discord_channel_id).catch(() => null);
 
       if (discordChannel) {
-        await discordChannel.send(`@everyone\n${channelData.video_message}\n${latestVideo.url}`);
-        console.log(`✅ تم إرسال فيديو جديد من ${channelData.tiktok_username}`);
+
+        await discordChannel.send(
+          `@everyone\n${channelData.video_message}\n${latestVideo.url}`
+        );
+
+        console.log(`🎥 فيديو جديد من ${channelData.tiktok_username}`);
+
       }
+
     }
 
     if (latestVideo && latestVideo.id !== channelData.last_video_id) {
@@ -220,20 +276,37 @@ async function checkChannelUpdates(channelData) {
     const liveStatus = await tiktokMonitor.checkLiveStatus(channelData.tiktok_username);
 
     if (liveStatus.isLive && !channelData.is_live) {
+
       const discordChannel = await client.channels.fetch(channelData.discord_channel_id).catch(() => null);
 
       if (discordChannel) {
-        await discordChannel.send(`@everyone\n${channelData.live_message}\n${liveStatus.liveUrl}`);
-        console.log(`✅ تم إرسال إشعار بث مباشر من ${channelData.tiktok_username}`);
+
+        await discordChannel.send(
+          `@everyone\n${channelData.live_message}\n${liveStatus.liveUrl}`
+        );
+
+        console.log(`🔴 بث مباشر من ${channelData.tiktok_username}`);
+
       }
 
       await database.updateChannelLiveStatus(channelData.tiktok_username, true);
-    } else if (!liveStatus.isLive && channelData.is_live) {
-      await database.updateChannelLiveStatus(channelData.tiktok_username, false);
+
     }
-  } catch (error) {
-    console.error(`خطأ في فحص ${channelData.tiktok_username}:`, error);
+
+    else if (!liveStatus.isLive && channelData.is_live) {
+
+      await database.updateChannelLiveStatus(channelData.tiktok_username, false);
+
+    }
+
   }
+
+  catch (error) {
+
+    console.error(`خطأ في فحص ${channelData.tiktok_username}:`, error);
+
+  }
+
 }
 
 client.login(process.env.DISCORD_TOKEN);
